@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpamGuard: is this message spam?</title>
+<style>
+  :root{
+    --bg:#eef2f7; --panel:#ffffff; --ink:#14213d; --muted:#5b6b82; --line:#d5dde8;
+    --spam:#c0272d; --spam-bg:#fdeceb; --safe:#17785a; --safe-bg:#e6f5ef; --accent:#2b4c9b;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0f1624; --panel:#18233a; --ink:#e8eefb; --muted:#9db0cf; --line:#2a3957;
+      --spam:#ff7b7f; --spam-bg:#3a1c22; --safe:#5fd3a8; --safe-bg:#143328; --accent:#8fb0ff; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    padding:clamp(16px,4vw,48px) 16px}
+  main{max-width:680px;margin:0 auto}
+  h1{font-size:clamp(28px,6vw,40px);line-height:1.1;margin:0 0 8px;letter-spacing:-.02em}
+  .sub{color:var(--muted);margin:0 0 24px;max-width:52ch}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+  label{font-weight:600;display:block;margin-bottom:8px}
+  textarea{width:100%;min-height:120px;resize:vertical;padding:12px;border-radius:10px;
+    border:1px solid var(--line);background:transparent;color:var(--ink);font:inherit}
+  textarea:focus,button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px}
+  button{font:inherit;cursor:pointer;border-radius:10px;padding:10px 18px;border:1px solid var(--line);
+    background:transparent;color:var(--ink)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  @media (prefers-color-scheme: dark){button.primary{color:#0f1624}}
+  button:disabled{opacity:.6;cursor:wait}
+  .chips button{font-size:14px;padding:6px 12px}
+  .hint{color:var(--muted);font-size:14px;margin-right:4px}
+  #result{margin-top:20px;display:none}
+  .verdict{border-radius:12px;padding:16px 18px;border:1px solid transparent}
+  .verdict.spam{background:var(--spam-bg);color:var(--spam);border-color:var(--spam)}
+  .verdict.ham{background:var(--safe-bg);color:var(--safe);border-color:var(--safe)}
+  .verdict h2{margin:0;font-size:22px}
+  .bar{height:10px;border-radius:99px;background:var(--line);margin:12px 0 4px;overflow:hidden}
+  .bar i{display:block;height:100%;background:currentColor;width:0;transition:width .4s ease}
+  .words{margin:14px 0 0;display:flex;gap:8px;flex-wrap:wrap}
+  .words span{background:var(--panel);border:1px solid var(--line);color:var(--ink);
+    border-radius:99px;padding:2px 10px;font-size:14px}
+  .err{color:var(--spam);margin-top:12px}
+  footer{margin-top:20px;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<main>
+  <h1>SpamGuard</h1>
+  <p class="sub">Paste an SMS or message. A machine-learning model trained on 5,574 real messages tells you if it looks like spam, and which words gave it away.</p>
+
+  <section class="card">
+    <label for="msg">Message to check</label>
+    <textarea id="msg" maxlength="2000" placeholder="e.g. Congratulations! You have won a free prize. Call now to claim."></textarea>
+    <div class="row">
+      <button class="primary" id="go">Check message</button>
+      <span class="hint">Or try:</span>
+      <span class="chips row" style="margin:0">
+        <button data-ex="WINNER!! You have been selected to receive a £900 prize reward. Call 09061701461 now to claim.">Prize scam</button>
+        <button data-ex="Hey, are we still meeting at the library at 5 today?">Normal chat</button>
+        <button data-ex="Your bank account is blocked. Click the link and verify your details urgently to avoid suspension.">Bank alert</button>
+      </span>
+    </div>
+    <div id="result" aria-live="polite"></div>
+  </section>
+
+  <footer id="stats">Loading model stats…</footer>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+async function check(){
+  const text = $("msg").value.trim();
+  const box = $("result");
+  if(!text){ box.style.display="block"; box.innerHTML='<p class="err">Type or paste a message first.</p>'; return; }
+  $("go").disabled = true; $("go").textContent = "Checking…";
+  try{
+    const r = await fetch("/api/predict",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});
+    if(!r.ok) throw new Error("Server returned " + r.status);
+    const d = await r.json();
+    const isSpam = d.label === "spam";
+    const pct = Math.round(d.spam_probability*100);
+    const words = d.suspicious_words.map(w=>`<span>${w.replace(/</g,"&lt;")}</span>`).join("");
+    box.innerHTML = `
+      <div class="verdict ${isSpam?"spam":"ham"}">
+        <h2>${isSpam ? "Looks like spam" : "Looks safe"}</h2>
+        <div class="bar"><i style="width:0" data-w="${pct}"></i></div>
+        <div>${pct}% chance this is spam</div>
+        ${words ? `<div class="words" aria-label="Words that raised suspicion">${words}</div>` : ""}
+      </div>`;
+    box.style.display="block";
+    requestAnimationFrame(()=>{ box.querySelector(".bar i").style.width = pct+"%"; });
+  }catch(e){
+    box.style.display="block";
+    box.innerHTML = `<p class="err">Could not reach the model: ${e.message}. Check that the server is running and try again.</p>`;
+  }finally{
+    $("go").disabled = false; $("go").textContent = "Check message";
+  }
+}
+
+$("go").addEventListener("click", check);
+document.querySelectorAll("[data-ex]").forEach(b=>b.addEventListener("click",()=>{ $("msg").value=b.dataset.ex; check(); }));
+
+fetch("/api/stats").then(r=>r.json()).then(s=>{
+  $("stats").textContent = `Model accuracy ${(s.accuracy*100).toFixed(1)}% on ${s.test_size} unseen messages · spam caught ${(s.recall*100).toFixed(0)}% · false alarms ${s.confusion.false_spam}`;
+}).catch(()=>{ $("stats").textContent = ""; });
+</script>
+</body>
+</html>
